@@ -1,12 +1,19 @@
 import { createServerClient } from '@/lib/supabase/server'
 import DashboardClient from '@/components/DashboardClient'
+import { redirect } from 'next/navigation'
 
 export default async function Dashboard() {
-  const supabase = await createServerClient()
-  const { data: { user } } = await supabase.auth.getUser()
+  let user = null
+  try {
+    const supabase = await createServerClient()
+    const { data } = await supabase.auth.getUser()
+    user = data?.user ?? null
+  } catch (e) {
+    console.warn('Supabase not configured or auth failed:', e instanceof Error ? e.message : e)
+  }
 
   if (!user) {
-    return null
+    redirect('/')
   }
 
   // Extract user's name for inbox matching

@@ -7,8 +7,14 @@ export default async function DashboardLayout({
 }: {
   children: React.ReactNode
 }) {
-  const supabase = await createServerClient()
-  const { data: { user } } = await supabase.auth.getUser()
+  let user = null
+  try {
+    const supabase = await createServerClient()
+    const { data } = await supabase.auth.getUser()
+    user = data?.user ?? null
+  } catch (e) {
+    console.warn('Dashboard layout: Supabase not configured or auth failed', e instanceof Error ? e.message : e)
+  }
 
   if (!user) {
     redirect('/')

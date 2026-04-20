@@ -1,4 +1,13 @@
 // HubSpot Types
+export interface HubSpotCallNote {
+  id: string
+  date: string        // ISO date string of the call
+  notes: string       // Body / description of the call
+  direction?: string  // e.g. "INBOUND" | "OUTBOUND"
+  duration?: number   // seconds
+  disposition?: string // e.g. "CONNECTED", "LEFT_VOICEMAIL"
+}
+
 export interface HubSpotContact {
   id: string
   properties: {
@@ -6,8 +15,17 @@ export interface HubSpotContact {
     lastname: string | null
     jobtitle: string | null
     email: string | null
+    /** Primary company association (HubSpot internal); fastest path to company record */
+    associatedcompanyid?: string | null
+    /** Booking stack may live on contact if not synced to company */
+    promptloop_booking_software?: string | null
+    booking_software?: string | null
+    booking_platform?: string | null
   }
   company?: HubSpotCompany
+  lastCall?: HubSpotCallNote  // Most recent call from HubSpot engagements
+  /** Concatenated CRM timeline note bodies (when fetched for booking detection; not a HubSpot property) */
+  hubspotCrmNotesText?: string
 }
 
 export interface HubSpotCompany {
@@ -21,6 +39,9 @@ export interface HubSpotCompany {
     gtm_modality?: string | null
     promptloop_modalities?: string | null
     promptloop_booking_software?: string | null
+    /** Alternate HubSpot internal names for the same field */
+    booking_software?: string | null
+    booking_platform?: string | null
     promptloop_number_of_locations?: string | null
     promptloop_avg_daily_class_count?: string | null
     promptloop_staff_count_website?: string | null

@@ -1,6 +1,7 @@
 'use client'
 
 import { HubSpotContact } from '@/types'
+import { resolveBookingSoftwareForContact } from '@/lib/booking-software'
 
 interface LeadCardProps {
   contact: HubSpotContact
@@ -11,6 +12,7 @@ interface LeadCardProps {
 export default function LeadCard({ contact, index, total }: LeadCardProps) {
   const { properties } = contact
   const company = contact.company?.properties
+  const resolvedBooking = resolveBookingSoftwareForContact(contact)
 
   return (
     <div className="bg-white rounded-lg border border-gray-200 p-6">
@@ -37,6 +39,12 @@ export default function LeadCard({ contact, index, total }: LeadCardProps) {
           )}
           {properties.email && (
             <div className="text-sm text-gray-500">{properties.email}</div>
+          )}
+          {resolvedBooking && (
+            <div className="pt-2">
+              <div className="text-xs text-gray-500 uppercase tracking-wide">Booking software</div>
+              <div className="text-sm font-medium text-gray-900">{resolvedBooking}</div>
+            </div>
           )}
         </div>
       </div>
@@ -78,9 +86,6 @@ export default function LeadCard({ contact, index, total }: LeadCardProps) {
               {company.promptloop_modalities && (
                 <PropertyItem label="Business Type" value={company.promptloop_modalities} />
               )}
-              {company.promptloop_booking_software && (
-                <PropertyItem label="Booking Software" value={company.promptloop_booking_software} />
-              )}
               {company.promptloop_number_of_locations && (
                 <PropertyItem label="Locations" value={company.promptloop_number_of_locations} />
               )}
@@ -114,6 +119,45 @@ export default function LeadCard({ contact, index, total }: LeadCardProps) {
       {!company && (
         <div className="text-sm text-gray-400 italic">
           No company data available
+        </div>
+      )}
+
+      {/* Last Call */}
+      {contact.lastCall ? (
+        <div className="mt-6 pt-5 border-t border-gray-100">
+          <h3 className="text-sm font-medium text-gray-500 uppercase tracking-wide mb-3">
+            Last Call
+          </h3>
+          <div className="space-y-2">
+            <div className="flex items-center gap-2 text-sm text-gray-600">
+              <span className="font-medium text-gray-900">
+                {new Date(contact.lastCall.date).toLocaleDateString('en-US', {
+                  year: 'numeric',
+                  month: 'long',
+                  day: 'numeric',
+                })}
+              </span>
+              {contact.lastCall.disposition && (
+                <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">
+                  {contact.lastCall.disposition.replace(/_/g, ' ')}
+                </span>
+              )}
+            </div>
+            {contact.lastCall.notes ? (
+              <p className="text-sm text-gray-700 bg-amber-50 border border-amber-100 rounded-lg p-3 whitespace-pre-wrap">
+                {contact.lastCall.notes}
+              </p>
+            ) : (
+              <p className="text-sm text-gray-400 italic">No notes recorded for this call.</p>
+            )}
+          </div>
+        </div>
+      ) : (
+        <div className="mt-6 pt-5 border-t border-gray-100">
+          <h3 className="text-sm font-medium text-gray-500 uppercase tracking-wide mb-1">
+            Last Call
+          </h3>
+          <p className="text-sm text-gray-400 italic">No previous calls found in HubSpot.</p>
         </div>
       )}
     </div>

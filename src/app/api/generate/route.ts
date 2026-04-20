@@ -1,28 +1,41 @@
 import { NextResponse } from 'next/server'
-import { generatePersonalizedEmail } from '@/lib/gemini'
+import { generatePersonalizedEmail } from '@/lib/openai-email'
 import { HubSpotContact } from '@/types'
+
+export const dynamic = 'force-dynamic'
 
 interface GenerateRequest {
   contact: HubSpotContact
   campaignName?: string
+  senderFirstName?: string
+  senderLastName?: string
 }
 
 export async function POST(request: Request) {
   try {
+    if (!process.env.OPENAI_API_KEY?.trim()) {
+      return NextResponse.json(
+        {
+          error:
+            'OPENAI_API_KEY is missing. Add it in Vercel → Environment Variables (or .env.local) and redeploy.',
+        },
+        { status: 500 }
+      )
+    }
+
     const body: GenerateRequest = await request.json()
-    const { contact, campaignName } = body
+    const { contact, campaignName, senderFirstName, senderLastName } = body
 
     if (!contact) {
-      return NextResponse.json(
-        { error: 'Contact is required' },
-        { status: 400 }
-      )
+      return NextResponse.json({ error: 'Contact is required' }, { status: 400 })
     }
 
     const email = await generatePersonalizedEmail({
       contact,
       company: contact.company || null,
       campaignContext: campaignName,
+      senderFirstName,
+      senderLastName,
     })
 
     return NextResponse.json({ email })

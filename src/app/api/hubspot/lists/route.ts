@@ -1,17 +1,26 @@
+import { unstable_noStore as noStore } from 'next/cache'
 import { NextResponse } from 'next/server'
-import { getLists } from '@/lib/hubspot'
+import { getLists, hubspotAccessToken } from '@/lib/hubspot'
+
+/** Must be dynamic: static prerender runs at build time without .env.local → empty token. */
+export const dynamic = 'force-dynamic'
+export const runtime = 'nodejs'
 
 export async function GET() {
+  noStore()
   try {
-    // Check if token is configured
-    if (!process.env.HUBSPOT_ACCESS_TOKEN) {
-      console.error('HUBSPOT_ACCESS_TOKEN not configured')
+    const token = hubspotAccessToken()
+    if (!token) {
       return NextResponse.json(
-        { error: 'HubSpot not configured', lists: [] },
+        {
+          error:
+            'HUBSPOT_ACCESS_TOKEN is empty. Create a HubSpot Private App token and add it to .env.local — see docs/HUBSPOT-SETUP.md',
+          lists: [],
+        },
         { status: 200 }
       )
     }
-    
+
     const lists = await getLists()
     return NextResponse.json({ lists })
   } catch (error) {

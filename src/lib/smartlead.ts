@@ -1,11 +1,23 @@
 import { SmartleadCampaign, SmartleadEmailAccount, SmartleadSequence } from '@/types'
+import { parseSmartleadCampaignListJson } from '@/lib/smartlead-campaign-list'
 
 const SMARTLEAD_API_BASE = 'https://server.smartlead.ai/api/v1'
 
+function smartleadApiKey(): string {
+  let k = (process.env.SMARTLEAD_API_KEY || '').trim()
+  if ((k.startsWith('"') && k.endsWith('"')) || (k.startsWith("'") && k.endsWith("'"))) {
+    k = k.slice(1, -1).trim()
+  }
+  return k
+}
+
 async function smartleadFetch(endpoint: string, options: RequestInit = {}) {
-  const apiKey = process.env.SMARTLEAD_API_KEY
+  const apiKey = smartleadApiKey()
+  if (!apiKey) {
+    throw new Error('SMARTLEAD_API_KEY is missing in .env.local')
+  }
   const separator = endpoint.includes('?') ? '&' : '?'
-  const url = `${SMARTLEAD_API_BASE}${endpoint}${separator}api_key=${apiKey}`
+  const url = `${SMARTLEAD_API_BASE}${endpoint}${separator}api_key=${encodeURIComponent(apiKey)}`
 
   const response = await fetch(url, {
     ...options,
@@ -15,34 +27,61 @@ async function smartleadFetch(endpoint: string, options: RequestInit = {}) {
     },
   })
 
+  const text = await response.text()
   if (!response.ok) {
-    const error = await response.text()
-    throw new Error(`Smartlead API error: ${response.status} - ${error}`)
+    throw new Error(`Smartlead API error: ${response.status} - ${text.slice(0, 800)}`)
   }
-
-  return response.json()
+  const trimmed = text.trim()
+  if (!trimmed) {
+    return null
+  }
+  try {
+    return JSON.parse(trimmed) as unknown
+  } catch {
+    throw new Error(`Smartlead API returned non-JSON (${response.status})`)
+  }
 }
 
-// Campaigns
+function campaignsEndpointPath(): string {
+  const clientId = (process.env.SMARTLEAD_CLIENT_ID || '').trim()
+  if (!clientId) return '/campaigns/'
+  return `/campaigns/?client_id=${encodeURIComponent(clientId)}`
+}
+
+// Campaigns — optional SMARTLEAD_CLIENT_ID for agency / multi-client keys (see Smartlead API).
 export async function getCampaigns(): Promise<SmartleadCampaign[]> {
-  return smartleadFetch('/campaigns/')
+  const data = await smartleadFetch(campaignsEndpointPath())
+  if (data && typeof data === 'object' && !Array.isArray(data)) {
+    const err = (data as { error?: unknown }).error
+    if (err != null && err !== '') {
+      throw new Error(typeof err === 'string' ? err : JSON.stringify(err))
+    }
+  }
+  return parseSmartleadCampaignListJson(data)
 }
 
 export async function getCampaign(campaignId: number): Promise<SmartleadCampaign> {
-  return smartleadFetch(`/campaigns/${campaignId}`)
+  const data = await smartleadFetch(`/campaigns/${campaignId}`)
+  if (!data || typeof data !== 'object') {
+    throw new Error('Smartlead returned an empty campaign response')
+  }
+  return data as SmartleadCampaign
 }
 
 export async function getCampaignSequences(campaignId: number): Promise<SmartleadSequence[]> {
-  return smartleadFetch(`/campaigns/${campaignId}/sequences`)
+  const data = await smartleadFetch(`/campaigns/${campaignId}/sequences`)
+  return Array.isArray(data) ? (data as SmartleadSequence[]) : []
 }
 
 // Email Accounts
 export async function getEmailAccounts(): Promise<SmartleadEmailAccount[]> {
-  return smartleadFetch('/email-accounts/')
+  const data = await smartleadFetch('/email-accounts/')
+  return Array.isArray(data) ? data : []
 }
 
 export async function getCampaignEmailAccounts(campaignId: number): Promise<SmartleadEmailAccount[]> {
-  return smartleadFetch(`/campaigns/${campaignId}/email-accounts`)
+  const data = await smartleadFetch(`/campaigns/${campaignId}/email-accounts`)
+  return Array.isArray(data) ? data : []
 }
 
 export async function addEmailAccountsToCampaign(
@@ -79,36 +118,72 @@ export async function getUserInboxes(
   })
 }
 
-// Lead Management
-interface LeadData {
+// Lead Management — Smartlead only allows specific top-level keys; everything else goes in custom_fields.
+// See https://api.smartlead.ai/api-reference/campaigns/add-leads
+export interface LeadData {
   email: string
   first_name?: string
   last_name?: string
   company_name?: string
-  [key: string]: string | undefined // Custom fields
+  custom_fields?: Record<string, string>
+}
+
+/**
+ * Add one lead to a campaign. Does not set sender inboxes here — Smartlead rejects
+ * `settings.email_account_ids` on this endpoint. Call `addEmailAccountsToCampaign` first
+ * so the campaign is linked to the mailboxes you want.
+ */
+export type AddLeadsApiResponse = {
+  success?: boolean
+  added_count?: number
+  skipped_count?: number
+  skipped_leads?: unknown[]
+  lead_ids?: number[]
+  message?: string
+  [key: string]: unknown
 }
 
 export async function addLeadToCampaign(
   campaignId: number,
-  lead: LeadData,
-  emailAccountIds?: number[]
-): Promise<void> {
-  const payload: {
-    lead_list: LeadData[]
-    settings?: { email_account_ids: number[] }
-  } = {
-    lead_list: [lead],
-  }
-
-  // Optionally specify which email accounts to use for this lead
-  if (emailAccountIds && emailAccountIds.length > 0) {
-    payload.settings = { email_account_ids: emailAccountIds }
-  }
-
-  await smartleadFetch(`/campaigns/${campaignId}/leads`, {
+  lead: LeadData
+): Promise<AddLeadsApiResponse> {
+  const data = await smartleadFetch(`/campaigns/${campaignId}/leads`, {
     method: 'POST',
-    body: JSON.stringify(payload),
+    body: JSON.stringify({
+      lead_list: [lead],
+      settings: { return_lead_ids: true },
+    }),
   })
+  return (data ?? {}) as AddLeadsApiResponse
+}
+
+/** Escape text nodes for HTML email bodies. */
+function escapeHtmlText(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+}
+
+/**
+ * Plain text → compact Smartlead HTML: one `<br>` between paragraphs; signature lines use `<br>` only (tight block).
+ */
+export function emailPlainTextToSmartleadHtml(introPlain: string, signaturePlain?: string): string {
+  const intro = introPlain.trimEnd()
+  const blocks = intro.split(/\n\s*\n+/).map((p) => p.trim()).filter(Boolean)
+  const introHtml = blocks
+    .map((p) => `<div>${escapeHtmlText(p).replace(/\n/g, '<br>')}</div>`)
+    .join('<br>')
+
+  let out = introHtml
+  const sig = signaturePlain?.trim()
+  if (sig) {
+    const lines = sig.split('\n').map((l) => l.trim()).filter(Boolean)
+    out += `<br><div>${lines.map(escapeHtmlText).join('<br>')}</div>`
+  }
+
+  return formatSmartleadHtml(out)
 }
 
 // HTML Email Formatting (from your documentation)

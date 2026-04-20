@@ -1,10 +1,15 @@
+import { unstable_noStore as noStore } from 'next/cache'
 import { NextResponse } from 'next/server'
 import { getListContacts, enrichContactsWithCompanies } from '@/lib/hubspot'
+
+export const dynamic = 'force-dynamic'
+export const runtime = 'nodejs'
 
 export async function GET(
   request: Request,
   { params }: { params: Promise<{ listId: string }> }
 ) {
+  noStore()
   try {
     const { listId } = await params
     const listIdNum = parseInt(listId, 10)
