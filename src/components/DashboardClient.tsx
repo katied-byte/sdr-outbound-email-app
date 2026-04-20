@@ -22,6 +22,10 @@ interface DashboardClientProps {
   userEmail: string
   firstName: string
   lastName: string
+  /** From server: real HubSpot lists + contacts when true (matches Vercel at request time). */
+  hubspotLive: boolean
+  /** From server: Smartlead console-only sends when true. */
+  smartleadTestOnly: boolean
 }
 
 type Step = 'select-campaign' | 'select-list' | 'lead-hub' | 'work-single-lead'
@@ -56,18 +60,6 @@ function leadHubBlurb(lead: HubSpotContact): string {
   if (sw) bits.push(sw)
   return bits.slice(0, 4).join(' · ') || '—'
 }
-
-/**
- * HubSpot: real lists + contacts when NEXT_PUBLIC_LIVE_OUTBOUND=true.
- * Smartlead sends: console-only (no Add Lead API) when NEXT_PUBLIC_SMARTLEAD_TEST_MODE=true or full mock demo.
- * Campaign picker: uses Smartlead API list whenever it returns campaigns; demo mocks only if sends are mocked and the API returned none.
- */
-const HUBSPOT_LIVE = process.env.NEXT_PUBLIC_LIVE_OUTBOUND === 'true'
-const SMARTLEAD_TEST_ONLY = process.env.NEXT_PUBLIC_SMARTLEAD_TEST_MODE === 'true'
-/** No HubSpot token / demo mode: mock lists + mock leads if API empty */
-const FULL_MOCK_DEMO = !HUBSPOT_LIVE
-/** No real Smartlead add-lead API; log to console instead */
-const SMARTLEAD_SEND_MOCKED = SMARTLEAD_TEST_ONLY || FULL_MOCK_DEMO
 
 const MAX_SENDS_PER_DAY = getMaxSendsPerDayFromEnv()
 
@@ -174,12 +166,17 @@ const MOCK_CONTACTS: HubSpotContact[] = [
   },
 ]
 
-export default function DashboardClient({ 
-  userId, 
-  userEmail, 
-  firstName, 
-  lastName 
+export default function DashboardClient({
+  userId,
+  userEmail,
+  firstName,
+  lastName,
+  hubspotLive,
+  smartleadTestOnly,
 }: DashboardClientProps) {
+  const fullMockDemo = !hubspotLive
+  const smartleadSendMocked = smartleadTestOnly || fullMockDemo
+
   const [step, setStep] = useState<Step>('select-campaign')
   const [campaigns, setCampaigns] = useState<SmartleadCampaign[]>([])
   const [lists, setLists] = useState<HubSpotList[]>([])
@@ -275,11 +272,11 @@ export default function DashboardClient({
       if (campaignsRes.ok) {
         const raw = await campaignsRes.json().catch(() => ({}))
         loadedCampaigns = parseSmartleadCampaignListJson(raw)
-      } else if (!SMARTLEAD_SEND_MOCKED) {
+      } else if (!smartleadSendMocked) {
         const errBody = (await campaignsRes.json().catch(() => ({}))) as { error?: string }
         setError(
           errBody.error ||
-            `Smartlead campaigns could not be loaded (HTTP ${campaignsRes.status}). Set SMARTLEAD_API_KEY in Vercel → Project → Environment Variables (Production), redeploy, then Reload campaigns. If you changed any NEXT_PUBLIC_* flag, redeploy again — those are baked in at build time. Local check: npm run test:integrations`
+            `Smartlead campaigns could not be loaded (HTTP ${campaignsRes.status}). Set SMARTLEAD_API_KEY in Vercel → Project → Environment Variables (Production), redeploy, then Reload campaigns. Local check: npm run test:integrations`
         )
       }
       if (inboxesRes.ok) {
@@ -293,13 +290,13 @@ export default function DashboardClient({
       // Test / demo: still show real campaigns from Smartlead when the API returns them (so search matches Smartlead UI).
       // Only fall back to mock campaign cards when sends are mocked and we have no API campaigns (e.g. no API key).
       const campaignsForPicker =
-        SMARTLEAD_SEND_MOCKED && loadedCampaigns.length === 0 ? MOCK_CAMPAIGNS : loadedCampaigns
+        smartleadSendMocked && loadedCampaigns.length === 0 ? MOCK_CAMPAIGNS : loadedCampaigns
       setCampaigns(campaignsForPicker)
 
       if (
         campaignsRes.ok &&
         loadedCampaigns.length === 0 &&
-        !SMARTLEAD_SEND_MOCKED
+        !smartleadSendMocked
       ) {
         setCampaignsLoadHint(
           'Smartlead returned no campaigns for this API key. The key may be for a different Smartlead user than the UI where you see the campaign, or your campaigns sit under an agency client — add SMARTLEAD_CLIENT_ID (Smartlead client id) to Vercel/server env and redeploy, then use Reload campaigns below.'
@@ -310,7 +307,7 @@ export default function DashboardClient({
       setAllSmartleadInboxes(accounts)
 
       // Restore saved inbox selection, else default to name-matched inboxes
-      if (!SMARTLEAD_SEND_MOCKED && accounts.length > 0) {
+      if (!smartleadSendMocked && accounts.length > 0) {
         const inboxKey = `sdr-outbound-inbox-ids-${userId}`
         try {
           const raw = typeof window !== 'undefined' ? localStorage.getItem(inboxKey) : null
@@ -339,7 +336,7 @@ export default function DashboardClient({
       }
     } catch (err) {
       setCampaignsLoadHint(null)
-      if (SMARTLEAD_SEND_MOCKED) {
+      if (smartleadSendMocked) {
         setCampaigns(MOCK_CAMPAIGNS)
         setAllSmartleadInboxes([])
         setSelectedInboxIds(new Set())
@@ -350,7 +347,7 @@ export default function DashboardClient({
       clearTimeout(t)
       setIsLoading(false)
     }
-  }, [firstName, lastName, userId])
+  }, [firstName, lastName, userId, smartleadSendMocked])
 
   // Fetch campaigns and user inboxes on mount
   useEffect(() => {
@@ -358,7 +355,7 @@ export default function DashboardClient({
   }, [fetchInitialData])
 
   useEffect(() => {
-    if (SMARTLEAD_SEND_MOCKED || selectedInboxIds.size === 0 || typeof window === 'undefined') return
+    if (smartleadSendMocked || selectedInboxIds.size === 0 || typeof window === 'undefined') return
     try {
       localStorage.setItem(
         `sdr-outbound-inbox-ids-${userId}`,
@@ -367,7 +364,7 @@ export default function DashboardClient({
     } catch {
       /* ignore quota */
     }
-  }, [userId, selectedInboxIds])
+  }, [userId, selectedInboxIds, smartleadSendMocked])
 
   useEffect(() => {
     setDailySentCount(getDailySendCount(userId))
@@ -400,7 +397,7 @@ export default function DashboardClient({
     setSelectedCampaign(campaign)
     setError(null)
 
-    if (FULL_MOCK_DEMO) {
+    if (fullMockDemo) {
       setLists(MOCK_LISTS)
       setStep('select-list')
       return
@@ -465,7 +462,7 @@ export default function DashboardClient({
       }
       
       // Use mock contacts in test mode if none returned
-      if (FULL_MOCK_DEMO && contacts.length === 0) {
+      if (fullMockDemo && contacts.length === 0) {
         contacts = MOCK_CONTACTS
       }
       
@@ -477,7 +474,7 @@ export default function DashboardClient({
       setLeadHubChooseMode(false)
       setStep('lead-hub')
     } catch (err) {
-      if (FULL_MOCK_DEMO) {
+      if (fullMockDemo) {
         // Use mock data when HubSpot is not live
         setLeads(MOCK_CONTACTS)
         setCurrentLeadIndex(0)
@@ -541,7 +538,7 @@ export default function DashboardClient({
           contact: data.contact,
         }
       }
-      if (SMARTLEAD_SEND_MOCKED) {
+      if (smartleadSendMocked) {
         return {
           email: buildStaticPersonalizedEmail(
             lead,
@@ -554,7 +551,7 @@ export default function DashboardClient({
       }
       throw new Error(data?.error || 'Failed to generate email')
     },
-    [selectedCampaign?.name, signatureIdentity.first, signatureIdentity.last]
+    [selectedCampaign?.name, signatureIdentity.first, signatureIdentity.last, smartleadSendMocked]
   )
 
   const generateEmailForLead = async (lead: HubSpotContact) => {
@@ -626,7 +623,7 @@ export default function DashboardClient({
 
   const handleBulkSend = async () => {
     if (!selectedCampaign) return
-    if (!SMARTLEAD_SEND_MOCKED && inboxIdsForSend.length === 0) {
+    if (!smartleadSendMocked && inboxIdsForSend.length === 0) {
       setError('Choose at least one Smartlead sending inbox (see “Send from which inbox?” above).')
       return
     }
@@ -643,7 +640,7 @@ export default function DashboardClient({
 
     let toProcess = eligible
     let capNote = ''
-    if (!SMARTLEAD_SEND_MOCKED && MAX_SENDS_PER_DAY != null) {
+    if (!smartleadSendMocked && MAX_SENDS_PER_DAY != null) {
       const used = getDailySendCount(userId)
       const remaining = Math.max(0, MAX_SENDS_PER_DAY - used)
       if (remaining <= 0) {
@@ -659,7 +656,7 @@ export default function DashboardClient({
     const estMin = Math.max(1, Math.ceil((toProcess.length * 2.5) / 60))
     if (
       !window.confirm(
-        `${SMARTLEAD_SEND_MOCKED ? 'Process' : 'Send'} ${toProcess.length} lead${toProcess.length === 1 ? '' : 's'} at once?\n\nEach gets its own AI-personalized email, then ${SMARTLEAD_SEND_MOCKED ? 'logs to the browser console (test mode).' : 'goes to Smartlead.'}${capNote}\n\nRough time: ~${estMin}+ minutes. Leave this tab open.`
+        `${smartleadSendMocked ? 'Process' : 'Send'} ${toProcess.length} lead${toProcess.length === 1 ? '' : 's'} at once?\n\nEach gets its own AI-personalized email, then ${smartleadSendMocked ? 'logs to the browser console (test mode).' : 'goes to Smartlead.'}${capNote}\n\nRough time: ~${estMin}+ minutes. Leave this tab open.`
       )
     ) {
       return
@@ -682,7 +679,7 @@ export default function DashboardClient({
       })
       try {
         const { email } = await getEmailForContact(lead)
-        if (!SMARTLEAD_SEND_MOCKED) {
+        if (!smartleadSendMocked) {
           const sendRes = await fetch('/api/smartlead/send', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -718,7 +715,7 @@ export default function DashboardClient({
     setBulkLastResult({ ok, failed: errList.length, errors: errList })
     if (errList.length > 0) {
       setError(`${errList.length} of ${toProcess.length} failed — see summary below.`)
-    } else if (!SMARTLEAD_SEND_MOCKED && ok > 0) {
+    } else if (!smartleadSendMocked && ok > 0) {
       setSmartleadInfo(
         `${ok} lead(s) added in Smartlead. Recipients get mail on Smartlead’s schedule — open the campaign there, confirm it’s started, and check Leads / Outbox. See docs/SMARTLEAD-SENDING-CHECKLIST.md.`
       )
@@ -735,7 +732,7 @@ export default function DashboardClient({
     if (!selectedCampaign || !generatedEmail || !leads[currentLeadIndex]) return
 
     if (
-      !SMARTLEAD_SEND_MOCKED &&
+      !smartleadSendMocked &&
       MAX_SENDS_PER_DAY != null &&
       getDailySendCount(userId) >= MAX_SENDS_PER_DAY
     ) {
@@ -750,7 +747,7 @@ export default function DashboardClient({
     try {
       const lead = leads[currentLeadIndex]
       
-      if (SMARTLEAD_SEND_MOCKED) {
+      if (smartleadSendMocked) {
         // In test mode, just log what would be sent
         console.log('=== TEST MODE: Email Preview ===')
         console.log('Campaign:', selectedCampaign.name)
@@ -846,7 +843,7 @@ export default function DashboardClient({
       (l.properties.email || '').trim()
   ).length
 
-  const dailyCapActive = MAX_SENDS_PER_DAY != null && !SMARTLEAD_SEND_MOCKED
+  const dailyCapActive = MAX_SENDS_PER_DAY != null && !smartleadSendMocked
   const dailyRemainingForUi =
     dailyCapActive && MAX_SENDS_PER_DAY != null
       ? Math.max(0, MAX_SENDS_PER_DAY - dailySentCount)
@@ -909,7 +906,7 @@ export default function DashboardClient({
       </div>
 
       {/* Smartlead: pick sending mailbox(es) — Google login stays yours */}
-      {!SMARTLEAD_SEND_MOCKED && allSmartleadInboxes.length > 0 && step !== 'select-campaign' && (
+      {!smartleadSendMocked && allSmartleadInboxes.length > 0 && step !== 'select-campaign' && (
         <div className="rounded-lg border border-indigo-200 bg-indigo-50/90 p-4 space-y-3">
           <div>
             <h3 className="text-sm font-semibold text-indigo-950">Send from which Smartlead inbox?</h3>
@@ -969,7 +966,7 @@ export default function DashboardClient({
         </div>
       )}
 
-      {!SMARTLEAD_SEND_MOCKED && allSmartleadInboxes.length === 0 && !isLoading && step !== 'select-campaign' && (
+      {!smartleadSendMocked && allSmartleadInboxes.length === 0 && !isLoading && step !== 'select-campaign' && (
         <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
           <p className="text-sm text-amber-900">
             <span className="font-medium">No Smartlead mailboxes returned.</span> Confirm{' '}
@@ -979,19 +976,21 @@ export default function DashboardClient({
         </div>
       )}
 
-      {SMARTLEAD_SEND_MOCKED && !isLoading && step !== 'select-campaign' && (
+      {smartleadSendMocked && !isLoading && step !== 'select-campaign' && (
         <div className="bg-purple-50 border border-purple-200 rounded-lg p-4">
           <p className="text-sm text-purple-800">
             <span className="font-medium">Smartlead test mode</span> — No leads are added in Smartlead; sends log to
             the browser console only. Your real Smartlead campaigns still appear in the picker when the API returns them.
-            {HUBSPOT_LIVE ? (
+            {hubspotLive ? (
               <>
                 {' '}
                 <strong>HubSpot is live</strong> (real lists and contacts). Set{' '}
                 <code className="text-[10px] bg-white/70 px-1 rounded">
                   NEXT_PUBLIC_SMARTLEAD_TEST_MODE=false
                 </code>{' '}
-                to send for real.
+                on the server, or set server-only{' '}
+                <code className="text-[10px] bg-white/70 px-1 rounded">SMARTLEAD_LIVE_SENDING=true</code> to force live
+                Smartlead even if the public flag is stuck, then redeploy.
               </>
             ) : null}
           </p>
@@ -1033,7 +1032,7 @@ export default function DashboardClient({
             campaigns={campaigns}
             onSelect={handleSelectCampaign}
             isLoading={isLoading}
-            liveMode={!SMARTLEAD_SEND_MOCKED}
+            liveMode={!smartleadSendMocked}
           />
         </div>
       )}
@@ -1331,12 +1330,12 @@ export default function DashboardClient({
                     disabled={bulkRunning || bulkAllowedToday === 0}
                     onClick={handleBulkSend}
                     className={`w-full sm:w-auto px-8 py-3 rounded-lg font-semibold text-white disabled:opacity-50 disabled:cursor-not-allowed ${
-                      SMARTLEAD_SEND_MOCKED ? 'bg-purple-600 hover:bg-purple-700' : 'bg-indigo-600 hover:bg-indigo-700'
+                      smartleadSendMocked ? 'bg-purple-600 hover:bg-purple-700' : 'bg-indigo-600 hover:bg-indigo-700'
                     }`}
                   >
                     {bulkRunning
                       ? 'Working…'
-                      : SMARTLEAD_SEND_MOCKED
+                      : smartleadSendMocked
                         ? `Send all (${bulkReadyCount}) — test: console only`
                         : dailyCapActive && bulkAllowedToday < bulkReadyCount
                           ? `Send next ${bulkAllowedToday} to Smartlead (cap)`
@@ -1356,10 +1355,10 @@ export default function DashboardClient({
               <>
                 <strong className="text-teal-800">Preview-all mode:</strong> use{' '}
                 <strong>Next lead</strong> to skip ahead without sending, or{' '}
-                <strong>{SMARTLEAD_SEND_MOCKED ? 'Log & next' : 'Send & next'}</strong> to record/send and move on.{' '}
+                <strong>{smartleadSendMocked ? 'Log & next' : 'Send & next'}</strong> to record/send and move on.{' '}
                 <strong>Back to list</strong> exits this walk.
               </>
-            ) : SMARTLEAD_SEND_MOCKED ? (
+            ) : smartleadSendMocked ? (
               'Test mode: sending logs to the browser console. Use Back to list to return without sending.'
             ) : (
               'After you send, you return to the list hub to pick the next lead or run Send all.'
@@ -1380,7 +1379,7 @@ export default function DashboardClient({
               onSkip={handleSkipLead}
               onEmailChange={setGeneratedEmail}
               isLastLead={isLastLead}
-              testMode={SMARTLEAD_SEND_MOCKED}
+              testMode={smartleadSendMocked}
               emailFromApi={emailFromApi}
               usingStaticTemplate={usingStaticTemplate}
               generateError={generateError}

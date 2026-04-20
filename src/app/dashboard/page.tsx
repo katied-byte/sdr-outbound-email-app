@@ -1,6 +1,9 @@
 import { createServerClient } from '@/lib/supabase/server'
 import DashboardClient from '@/components/DashboardClient'
+import { readHubspotLiveOutbound, readSmartleadTestOnly } from '@/lib/env-flag'
 import { redirect } from 'next/navigation'
+
+export const dynamic = 'force-dynamic'
 
 export default async function Dashboard() {
   let user = null
@@ -22,12 +25,18 @@ export default async function Dashboard() {
   const firstName = nameParts[0] || user.email?.split('@')[0] || ''
   const lastName = nameParts.slice(1).join(' ') || ''
 
+  // Use runtimeNextPublic paths so flags are not build-inlined (see env-flag.ts).
+  const hubspotLive = readHubspotLiveOutbound()
+  const smartleadTestOnly = readSmartleadTestOnly()
+
   return (
     <DashboardClient
       userId={user.id}
       userEmail={user.email || ''}
       firstName={firstName}
       lastName={lastName}
+      hubspotLive={hubspotLive}
+      smartleadTestOnly={smartleadTestOnly}
     />
   )
 }
